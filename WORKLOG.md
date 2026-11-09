@@ -812,3 +812,34 @@
 **Scouted next**: Anekenonso band (#4273 arity/non-callable, #4271 variadic spread on non-variadic foreign funcs — patch-id dup-check vs landed #4202/#4201; #743 identifier/primitive-type collision), dextermos-dev band re-pushed again (6 PRs, 17:04-17:05Z), #4238 (wminno), #4123/#4122 (phatloi0010), old-backlog rebase wave (#584-#791 re-pushed 16:54Z — bulk wave, screen cheaply by band). Pending authors: #4199, #4206, #4097, #4217, #4219.
 
 **State**: main `fd3fae1c` == origin (pushed this tick). Suites 493, corpus 139/139, differential FULL. Disk ~91% after incremental trim.
+
+## Session 175 — 2026-11-10 04:10 (S174 interrupted mid-battery by tool outage; resumed S175)
+
+**Landed: #4273** (Anekenonso, sync package call arity + non-callable rejection, fixes #4272) — merge `3b025ccd`, reply 6750417684.
+- Head `7d89f045` fetched from fork; real merge-base `e33e8dc9`; +51 buildable.rs / +98 suite, pure increment. Trial-merge tree `5fb72481`.
+- Member list vs main foreign.rs: exact match (10 type aliases + 4 fns). go doc oracle (pinned go1.26.9): NewCond/OnceFunc/OnceValue/OnceValues all exactly 1 param — PR's Some(1) table correct; all 10 non-callable names are types/interfaces.
+- Gates: 3249/0 (+4 exact), 494=494 1:1, PR suite 4/4 on union tree, corpus 139/139 (tripwire 1.4% < 25%), differential FULL 47/47+92/92.
+- #4272 checked pre-merge: no milestone, no labels → `fixes #4272` in merge commit (S173 #4200 lesson applied the other way).
+
+**Ops deep-dive — the "bus error" era explained**:
+1. S174 battery died with `ld terminated with signal 7 [Bus error]` at 93% disk → assumed disk-full, trimmed 550MB, retried. S175 saw SIGBUS again at **49% disk** → disk was never the linker root cause. It is a transient **parallel-lld-on-overlayfs race**: single-target relink succeeds deterministically; retrying the workspace battery resumed and completed with zero linker errors.
+2. Second battery flake: `hy-emit` `test_curated_import_go_build_compilation` failed with `mkdir /tmp/go-build…: no space left on device` — the workspace compile had filled the 9.9G rootfs (target dir 5.4G, 1094 deps files ~4.7G). Trimmed `debug/incremental` (666M) → rerun green.
+3. **Attribution hygiene**: hy-emit lib re-run on clean main first (193/0) before blaming the PR — failure was environmental both times. Target-dir discipline: after a full battery the rootfs sits ~94%; trim `debug/incremental` before any heavy go phase (corpus/differential need /tmp go-build space).
+4. S174 loss post-mortem: repo was left mid-merge (`merge --no-commit`) when the tool wall hit; sandbox recycle reset it cleanly (no residual state). Triage scan/approve background pids died with the session — /tmp outputs lost; triage still pending rerun.
+
+**Scouted next**: #4271 (Anekenonso variadic spread on non-variadic foreign funcs in url/sort/path/filepath, head `d85c6d26` — patch-id dedup vs landed #4202/#4201 first: if those already reject spread for their packages, this is redundant → written reply; check overlap with #4273's spread arm), #743 (Anekenonso identifier/primitive-type collision, head `46f3ac56`), dextermos-dev band (6 PRs re-pushed), #4238 (wminno), #4123/#4122 (phatloi0010), old-backlog rebase wave #584-#791 (screen by band cheaply). Pending authors: #4199, #4206, #4097, #4217, #4219.
+
+**State**: main `3b025ccd` == origin (pushed this tick). Suites 494, tests 3249, corpus 139/139, differential FULL. Disk ~94% after battery (trim incremental before next heavy phase).
+
+### S175 addendum — second landing this tick
+
+**Landed: #4271** (Anekenonso, reject variadic spread on non-variadic foreign calls in url/sort/path/filepath, fixes #4270) — merge `416eb76c`, reply 6750548703.
+- Head `d85c6d26` (full sha via API; abbreviated sha fetch fails — always resolve full sha first). Merge-base `e33e8dc9`, trial-merge tree `6ec825f1`, +32/−4 buildable.rs + 2 suites × +38 pure additions.
+- Premise probed on pre-merge main: url.query_escape / sort.float64s / filepath.join spread → 0 diagnostics (Row-13 bypass live).
+- **False-rejection audit (the decisive check)**: member-by-member against go doc — no arity-table member in the four packages is variadic in Go; url.JoinPath (the one real variadic) lives on the None-arity path with its own ≥1-arg branch, untouched; filepath/path.Join not in tables (None-arity passthrough unchanged, and that passthrough is CORRECT for join since Go Join is variadic).
+- Gates: 3253/0 (+4 exact), 494=494, corpus 139/139, differential FULL 47/47+92/92. #4270 no milestone → `fixes` safe.
+- Residual noted in reply (pre-existing, not PR scope): None-arity members bypass arity+spread; join's passthrough is correct-by-variadicity, non-[]string spread there needs the type checker (different rule).
+
+**State**: main `416eb76c` == origin. Suites 494, tests 3253, corpus 139/139, differential FULL. Disk trimmed twice this tick (incremental regrew to 531M mid-battery; rootfs hit 100% again with 50M free — trim BEFORE corpus/differential, go builds need /tmp headroom).
+
+**Scouted next**: #743 (Anekenonso identifier/primitive-type collision, head `46f3ac56` — third Anekenonso PR this band), dextermos-dev band (6 PRs), #4238 (wminno), #4123/#4122 (phatloi0010), old-backlog rebase wave #584-#791. Pending authors: #4199, #4206, #4097, #4217, #4219. Triage scan/approve STILL pending rerun (session losses twice).
