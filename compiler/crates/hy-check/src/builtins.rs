@@ -743,7 +743,7 @@ impl<'a> Checker<'a> {
         };
         let base = unwrap_parens(base);
         if let Expr::Ident { name, .. } = base {
-            if self.lookup_binding(st, name).is_none() && self.packages.contains(name.as_str()) {
+            if self.lookup_binding(st, name).is_none() && self.known_package(name.as_str()) {
                 return true;
             }
         }
@@ -755,7 +755,7 @@ impl<'a> Checker<'a> {
         | crate::model::TypeShape::OwnHandle(ty)
         | crate::model::TypeShape::BorrowHandle(ty) = recv
         {
-            return self.packages.contains(ty.split('.').next().unwrap_or(""));
+            return self.known_package(ty.split('.').next().unwrap_or(""));
         }
         false
     }

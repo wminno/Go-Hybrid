@@ -2469,9 +2469,10 @@ mod tests {
 
     #[test]
     fn fc_closure_without_boundary_stays_outside_perimeter() {
-        // corpus 10 shape unchanged: a capture used INSIDE a closure without
-        // any task/send statement is still the A5 perimeter (Q1, OQ1) — the
-        // closure pass owns boundary statements, nothing more
+        // #4493: the A5 escape site classifies foreign callees by resolved
+        // package identity, not by the file's import declarations — verdicts
+        // must not flip on an otherwise-optional `import` line (GUARANTEES
+        // row 9 is Guaranteed). Same verdict with or without the import.
         let r = check(
             "fn main() {\n\
                hits := 0\n\
@@ -2481,13 +2482,34 @@ mod tests {
                }))\n\
              }",
         );
-        assert_eq!(r.verdict, Verdict::Accept, "{:?}", r.diagnostics);
-        assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+        assert_eq!(r.verdict, Verdict::Reject, "{:?}", r.diagnostics);
+        assert!(r.diagnostics.iter().any(|d| d.code == "HYB-E3013"), "{:?}", r.diagnostics);
+    }
+
+    #[test]
+    fn a5_4493_import_present_still_rejects() {
+        // #4493 twin: corpus 10 (with `import "net/http"`) must keep
+        // rejecting — the fix must not weaken the imported variant either.
+        let r = check(
+            "import \"net/http\"\n\
+             fn main() {\n\
+               hits := 0\n\
+               mux := http.new_serve_mux()\n\
+               mux.handle(\"/ping\", http.handler(fn(w http.response_writer, r *http.request) {\n\
+                 hits++\n\
+                 fmt.fprintln(w, \"pong {hits}\")\n\
+               }))\n\
+             }",
+        );
+        assert_eq!(r.verdict, Verdict::Reject, "{:?}", r.diagnostics);
+        assert!(r.diagnostics.iter().any(|d| d.code == "HYB-E3013"), "{:?}", r.diagnostics);
     }
 
     #[test]
     fn closure_capture_is_outside_perimeter() {
-        // 10-shape: FnLit bodies are never analyzed (A5 scoped claim).
+        // 10-shape: FnLit bodies are never analyzed by the closure pass; the
+        // HYB-E3013 verdict comes from the escape site at the call in main
+        // (#4493: foreign-callee classification is import-independent).
         let r = check(
             "fn main() {\n\
                hits := 0\n\
@@ -2497,7 +2519,8 @@ mod tests {
                }))\n\
              }",
         );
-        assert_eq!(r.verdict, Verdict::Accept, "{:?}", r.diagnostics);
+        assert_eq!(r.verdict, Verdict::Reject, "{:?}", r.diagnostics);
+        assert!(r.diagnostics.iter().any(|d| d.code == "HYB-E3013"), "{:?}", r.diagnostics);
     }
 
     #[test]
