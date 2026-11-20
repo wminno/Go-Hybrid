@@ -529,6 +529,9 @@ impl Emitter {
                     }
                     if l.names.len() == 1 && l.names[0] != "_" {
                         self.register_var_ty(&l.names[0], t);
+                    }                    if l.names.len() == 1 && l.names[0] != "_" {
+                        self.register_var_ty(&l.names[0], t);
+                        self.register_var_cap(&l.names[0], t);
                     }
                 }
                 return Ok(());
@@ -1296,6 +1299,22 @@ impl Emitter {
             Vec::new()
         };
         self.shadow_local_names(names);
+        self.shadow_local_names(names);
+        // `tx, rx := hy.pipe[int]()` binds TWO names from ONE call: the
+        // first to the send capability, the second to the receive one
+        // (issue #4464).
+        if names.len() == 2 && values.len() == 1 {
+            if let Expr::Call { callee, .. } = Self::peel_parens(&values[0]) {
+                if let Expr::Field { base, name, .. } = callee.as_ref() {
+                    let is_pipe = matches!(Self::peel_parens(base.as_ref()), Expr::Ident { name, .. } if name == "hy")
+                        && name.split('[').next() == Some("pipe");
+                    if is_pipe {
+                        self.var_cap.insert(names[0].clone(), crate::CapSide::Tx);
+                        self.var_cap.insert(names[1].clone(), crate::CapSide::Rx);
+                    }
+                }
+            }
+        }
         if let Some(kind) = single_hint {
             if kind != BindingKind::Plain {
                 self.bindings.insert(names[0].clone(), kind);

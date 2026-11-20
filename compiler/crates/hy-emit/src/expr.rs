@@ -1039,6 +1039,29 @@ impl Emitter {
             }
         }
 
+        // --- capability constructor (issue #4464): `hy.pipe[int]()` lowers
+        //     to the prelude pair `hy_pipe_new[int]()` — one bidirectional
+        //     channel viewed through a send-only and a receive-only witness.
+        //     `hy` is a language namespace, not a package root: without this
+        //     branch the call falls through to verbatim emission and dies in
+        //     Go as `undefined: hy`.
+        if let Expr::Field { base, name, .. } = callee {
+            if let Expr::Ident { name: ns, .. } = Self::unwrap_parens(base.as_ref()) {
+                if ns == "hy"
+                    && !self.local_vars.contains("hy")
+                    && !self.bindings.contains_key("hy")
+                {
+                    let (head, ta) = split_type_args(name);
+                    if head == "pipe" && args.is_empty() {
+                        let translated_ta = ta
+                            .map(|ta| self.translate_type_args_suffix(ta))
+                            .unwrap_or_else(|| "[]".to_string());
+                        return Ok(format!("hy_pipe_new{}()", translated_ta));
+                    }
+                }
+            }
+        }
+
         // --- package-qualified calls ---
         if let Expr::Field { base, name, .. } = callee {
             if let Expr::Ident { name: pkg, .. } = Self::unwrap_parens(base.as_ref()) {
@@ -1059,6 +1082,35 @@ impl Emitter {
 
         // --- method calls on foreign bindings normalize (M4 + shapes) ---
         // Shape-table first (Batch E): a typed chain resolves
+        // --- capability members (issue #4464): `tx.send(v)` / `tx.close()` /
+        //     `rx.recv()` / `rx.drain()` on a hy.pipe half lower to Go
+        //     channel operations. The receiver is a directional-channel var
+        //     (var_cap), not a shape — the table below would never resolve
+        //     it and the call would emit verbatim and die as `undefined: tx`.
+        if let Expr::Field { base, name, .. } = callee {
+            let base = Self::selector_base(base);
+            if let Expr::Ident { name: root, .. } = Self::unwrap_parens(base) {
+                if let Some((chan, is_tx)) = self.cap_root(root) {
+                    let mut parts = Vec::new();
+                    for a in args {
+                        parts.push(self.emit_call_arg(a)?);
+                    }
+                    return Ok(match (name.as_str(), is_tx, parts.len()) {
+                        ("send", true, 1) => format!("{} <- {}", chan, parts[0]),
+                        ("close", true, 0) => format!("close({})", chan),
+                        ("recv", false, 0) => format!("<-{}", chan),
+                        ("drain", false, 0) => format!("hy_cap_drain({})", chan),
+                        (m, _, _) => {
+                            return Err(EmitError::unsupported(&format!(
+                                "capability half has no member `{}` (send/close on the send half, recv/drain on the receive half)",
+                                m
+                            )))
+                        }
+                    });
+                }
+            }
+        }
+
         // field-vs-method exactly (`r.url.query.get("a")` →
         // `r.URL.Query().Get("a")`); generic Foreign falls back to M4.
         if let Expr::Field { base, name, .. } = callee {

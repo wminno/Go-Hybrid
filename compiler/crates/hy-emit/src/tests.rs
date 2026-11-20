@@ -3119,3 +3119,9 @@ fn utf8_byte_escapes_emit_exact_utf8_strings_issue_1199() {
         go
     );
 }
+
+#[test]
+fn probe_cap_emission() {
+    let go = emit("fn worker(tx hy.send_cap[int]) {\n    tx.send(42)\n    tx.close()\n}\n\nfn main() {\n    tx, rx := hy.pipe[int]()\n    task worker(move tx)\n    v := rx.recv()\n    _ = v\n    rx.drain()\n}\n");
+    println!("=== EMITTED ===\n{}", go);
+}

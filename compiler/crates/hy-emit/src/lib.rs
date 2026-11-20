@@ -110,6 +110,7 @@ const SET_PRELUDE: &str = concat!(
 
 /// N5 for `make([]T, n[, c])` (zeroinit.rs): every slot up to the capacity
 /// gets an allocated zero value, so a reslice inside the capacity meets N5 values too.
+const PIPE_PRELUDE: &str = "// ---- Hybrid prelude: hy.pipe capability pair (auto-generated; do not edit) ----\nfunc hy_pipe_new[t any]() (chan<- t, <-chan t) {\n\tch := make(chan t)\n\treturn ch, ch\n}\n\nfunc hy_cap_drain[r any](ch <-chan r) {\n\tfor range ch {\n\t}\n}\n";
 const N5_MAKE_PRELUDE: &str = "// ---- Hybrid prelude: N5 slice allocation (auto-generated; do not edit) ----\nfunc hy_n5_make[t any](zero func() t, n int, c ...int) []t {\n\tcapacity := n\n\tif len(c) > 0 {\n\t\tcapacity = c[0]\n\t}\n\ts := make([]t, capacity)\n\tfor i := range s {\n\t\ts[i] = zero()\n\t}\n\treturn s[:n]\n}\n";
 
 const POP_PRELUDE: &str = concat!(
@@ -468,6 +469,45 @@ pub(crate) fn result_shape(results: &[FnResult]) -> (usize, bool) {
     (n, err)
 }
 
+/// Capability lowering (issue #4464): which side of a `hy.pipe[int]` pair a
+/// var is bound to. `tx, rx := hy.pipe[int]()` binds the FIRST name to the
+/// send capability (`chan<- t`) and the second to the receive one (`<-chan t`).
+#[derive(Clone, Copy)]
+pub(crate) enum CapSide {
+    Tx,
+    Rx,
+}
+
+impl Emitter {
+    /// A var whose declared type is a capability (`hy.send_cap[int]` /
+    /// `hy.recv_cap[int]`) — members `send`/`close`/`recv`/`drain` lower to
+    /// channel operations instead of going through the shape table.
+    fn register_var_cap(&mut self, name: &str, ty: &TypeExpr) {
+        if let TypeExpr::Named { name: tyname, .. } = self.resolve_type_alias(ty) {
+            let half = match tyname.as_str() {
+                "hy.send_cap[int]" => Some(CapSide::Tx),
+                "hy.recv_cap[int]" => Some(CapSide::Rx),
+                _ => None,
+            };
+            if let Some(half) = half {
+                self.var_cap.insert(name.to_string(), half);
+            }
+        }
+    }
+
+    /// Channel lowering of a capability var: (Go channel expression,
+    /// is_send_side). The var itself is the channel — the declared type is
+    /// rewritten to a directional chan, so operations target the var name.
+    fn cap_root(&self, root: &str) -> Option<(String, bool)> {
+        match self.var_cap.get(root) {
+            Some(CapSide::Tx) => Some((root.to_string(), true)),
+            Some(CapSide::Rx) => Some((root.to_string(), false)),
+            None => None,
+        }
+    }
+}
+
+
 pub(crate) fn base_ty_name(t: &TypeExpr) -> Option<String> {
     match t {
         TypeExpr::Named { name, .. } => Some(match name.as_str() {
@@ -490,7 +530,8 @@ pub(crate) fn is_package_root(name: &str) -> bool {
     // special-case table below.
     matches!(
         name,
-        "fmt"
+        "hy"
+            | "fmt"
             | "os"
             | "io"
             | "time"
@@ -672,6 +713,7 @@ pub struct Emitter {
     /// var → user-struct name (value or pointer): `stats := pool_stats{}` /
     /// `worker(..., stats *pool_stats)`.
     var_struct: BTreeMap<String, String>,
+    var_cap: BTreeMap<String, CapSide>,
     /// var → (shape-known dotted type, is_pointer): `var hits atomic.int64`
     /// / `hits *atomic.int64` — the MethodFunc receiver's address-of form.
     var_ty: BTreeMap<String, (String, bool)>,
@@ -703,6 +745,7 @@ pub(crate) struct ScopeSnapshot {
     bindings: BTreeMap<String, BindingKind>,
     var_ty: BTreeMap<String, (String, bool)>,
     var_struct: BTreeMap<String, String>,
+    var_cap: BTreeMap<String, CapSide>,
     pointer_vars: BTreeSet<String>,
     loan_aliases: BTreeMap<String, BTreeSet<String>>,
 }
@@ -738,6 +781,7 @@ impl Emitter {
             closure_shapes: BTreeMap::new(),
             struct_fields: BTreeMap::new(),
             var_struct: BTreeMap::new(),
+            var_cap: BTreeMap::new(),
             var_ty: BTreeMap::new(),
             pointer_vars: BTreeSet::new(),
             loan_aliases: BTreeMap::new(),
@@ -762,6 +806,7 @@ impl Emitter {
             bindings: self.bindings.clone(),
             var_ty: self.var_ty.clone(),
             var_struct: self.var_struct.clone(),
+            var_cap: self.var_cap.clone(),
             pointer_vars: self.pointer_vars.clone(),
             loan_aliases: self.loan_aliases.clone(),
         }
@@ -772,6 +817,7 @@ impl Emitter {
         self.bindings = saved.bindings;
         self.var_ty = saved.var_ty;
         self.var_struct = saved.var_struct;
+        self.var_cap = saved.var_cap;
         self.pointer_vars = saved.pointer_vars;
         self.loan_aliases = saved.loan_aliases;
     }
@@ -782,6 +828,7 @@ impl Emitter {
             self.bindings.remove(name);
             self.var_ty.remove(name);
             self.var_struct.remove(name);
+            self.var_cap.remove(name);
             self.pointer_vars.remove(name);
             self.loan_aliases.remove(name);
             for aliases in self.loan_aliases.values_mut() {
@@ -1087,6 +1134,11 @@ impl Emitter {
                 out.push_str(N5_MAKE_PRELUDE);
                 out.push('\n');
             }
+        }
+        if body.contains("hy_pipe_new(") || body.contains("hy_cap_drain(") {
+            out.push('\n');
+            out.push_str(PIPE_PRELUDE);
+            out.push('\n');
         }
         out.push('\n');
         out.push_str(&self.body);
@@ -1458,6 +1510,7 @@ impl Emitter {
         self.var_struct.clear();
         self.closure_shapes.clear();
         self.var_ty.clear();
+        self.var_cap.clear();
         self.pointer_vars.clear();
         self.loan_aliases.clear();
         self.local_vars.clear();
@@ -1760,6 +1813,7 @@ impl Emitter {
             } else if matches!(self.resolve_type_alias(&p.ty), TypeExpr::Chan { .. }) {
                 self.bindings.insert(p.name.clone(), BindingKind::Chan);
             }
+            self.register_var_cap(&p.name, &p.ty);
             if self.is_pointer_ty(&p.ty) {
                 self.pointer_vars.insert(p.name.clone());
             }
@@ -2082,7 +2136,18 @@ impl Emitter {
                 return format!("map[{}]{}", k, v);
             }
         }
-        if let Some(open) = name.find('[') {
+        if let Some(open) = name.find('[') {        // Capability types (issue #4464): the two directional halves of a
+        // `hy.pipe` pair, spelled `hy.send_cap[T]` / `hy.recv_cap[T]` on the
+        // surface, lower to Go directional channel types.
+        if name.starts_with("hy.send_cap[") && name.ends_with(']') {
+            let elem = self.go_type_name(&name["hy.send_cap[".len()..name.len() - 1]);
+            return format!("chan<- {}", elem);
+        }
+        if name.starts_with("hy.recv_cap[") && name.ends_with(']') {
+            let elem = self.go_type_name(&name["hy.recv_cap[".len()..name.len() - 1]);
+            return format!("<-chan {}", elem);
+        }
+
             if open > 0 && name.ends_with(']') {
                 let head = &name[..open];
                 let inner = &name[open + 1..name.len() - 1];
