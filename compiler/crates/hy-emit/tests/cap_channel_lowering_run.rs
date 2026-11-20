@@ -51,3 +51,38 @@ fn main() {
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "42");
 }
+
+/// Issue #4464's own repro shape: feeder task sends, then main drains via
+/// `for v in rx`. (Sends kept flat: on the recon base the checker replayed
+/// loop-carried caps as E3001 false positives — checker-side, filed as such.)
+#[test]
+fn cap_drain_loop_builds_and_runs() {
+    let src = "\
+package main
+import \"fmt\"
+
+fn feeder(tx hy.send_cap[int]) {
+    tx.send(1)
+    tx.send(2)
+    tx.close()
+}
+
+fn main() {
+    tx, rx := hy.pipe[int]()
+    task feeder(move tx)
+    for v in rx {
+        fmt.println(\"{v}\")
+    }
+}
+";
+    let go_src = emit_go(&parse_file("test.hy", src).expect("parse")).expect("emit");
+    for expected in ["hy_pipe_new", "chan<- int", "tx <- 1", "tx <- 2", "close(tx)", "range rx"] {
+        assert!(go_src.contains(expected), "missing `{expected}` in:\n{go_src}");
+    }
+    let go_file = std::env::temp_dir().join("hy_cap_drain_loop_run.go");
+    std::fs::write(&go_file, &go_src).expect("write");
+    let out = Command::new("go").args(["run", go_file.to_str().unwrap()]).output().expect("go run");
+    let _ = std::fs::remove_file(&go_file);
+    assert!(out.status.success(), "{}\n---\n{}", String::from_utf8_lossy(&out.stderr), go_src);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n");
+}

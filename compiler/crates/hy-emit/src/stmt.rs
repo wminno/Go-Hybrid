@@ -1311,6 +1311,11 @@ impl Emitter {
                     if is_pipe {
                         self.var_cap.insert(names[0].clone(), crate::CapSide::Tx);
                         self.var_cap.insert(names[1].clone(), crate::CapSide::Rx);
+                        // Both halves are Go channels: single-var range over
+                        // the recv half must bind the VALUE (channels permit
+                        // one iteration variable), not the index.
+                        self.bindings.insert(names[0].clone(), BindingKind::Chan);
+                        self.bindings.insert(names[1].clone(), BindingKind::Chan);
                     }
                 }
             }

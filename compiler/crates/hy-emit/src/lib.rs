@@ -1135,7 +1135,7 @@ impl Emitter {
                 out.push('\n');
             }
         }
-        if body.contains("hy_pipe_new(") || body.contains("hy_cap_drain(") {
+        if body.contains("hy_pipe_new") || body.contains("hy_cap_drain(") {
             out.push('\n');
             out.push_str(PIPE_PRELUDE);
             out.push('\n');
